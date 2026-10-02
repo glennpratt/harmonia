@@ -14,6 +14,8 @@ It's written in Rust for speed.
   Also discovers index.html to allow serving websites directly from the nix store.
 - Content is compressed transparently with [zstd](https://en.wikipedia.org/wiki/Zstd).
 - Builtin TLS: when no frontend webserver is used, Harmonia can also provide TLS encryption
+- Optional pull-through: paths missing locally are substituted into the store by
+  the local nix-daemon, then served
 
 ## Configuration for public binary cache on NixOS
 
@@ -149,7 +151,7 @@ enable_compression = true
 # real_nix_store = "/guest/nix/store"
 
 # Path to the nix SQLite database. Harmonia reads store metadata directly from
-# this file (no nix-daemon connection is used). Derived from the store layout
+# this file (no nix-daemon connection is used, except for pull-through). Derived from the store layout
 # by default; override only for non-standard state directories.
 # nix_db_path = "/nix/var/nix/db/db.sqlite"
 ```
@@ -190,6 +192,51 @@ openssl req -x509 -newkey rsa:2048 -keyout key.pem -out cert.pem -days 365 -node
 ```
 
 Note: When TLS is enabled, harmonia will only accept HTTPS connections on the configured port.
+
+### Pull-through substitution
+
+With pull-through enabled, a narinfo request for a path the store doesn't have
+makes the local nix-daemon substitute it (`EnsurePath`), after which it is
+served like any other path. Pulled paths are ordinary store paths: the host's
+normal garbage collection prunes them, the daemon's own substituters, trusted
+keys and credentials apply, and upstream signatures are kept.
+
+```toml
+[pull_through]
+enable = true
+# Used only to resolve a requested hash to a store path. The daemon's own
+# `substituters` do the downloading, so keep the two in step.
+upstreams = ["https://cache.nixos.org"]
+# Credentials for authenticated upstreams (e.g. nix.conf's `netrc-file`).
+# netrc_file = "/etc/nix/netrc"
+# daemon_socket = "/nix/var/nix/daemon-socket/socket"
+# How long a hash no upstream has is answered with 404 without asking again.
+# negative_ttl = "5m"
+# Cap on concurrent substitutions.
+# max_concurrent = 16
+# Pulled paths stay GC-rooted for between one and two of these, covering the
+# gap between a client's narinfo and NAR requests.
+# temp_root_ttl = "10m"
+# How long a narinfo request waits for a substitution before answering 404.
+# The substitution continues, so a retry finds the path.
+# request_timeout = "60s"
+# Timeout for each upstream narinfo lookup.
+# upstream_timeout = "10s"
+```
+
+harmonia usually runs as an untrusted user. Untrusted daemon clients may still
+substitute from the daemon's configured substituters, with signatures checked,
+so no `trusted-users` change is needed.
+
+Pull-through lets anyone who can reach harmonia make the host download
+anything the upstreams have. It is off by default and meant for trusted
+networks. It only ever substitutes, never builds. harmonia is read-only, so
+the push/pull ambiguity of other pull-through caches
+([NixOS/nix#15249](https://github.com/NixOS/nix/issues/15249)) doesn't arise.
+
+Metrics: `harmonia_pull_through_requests_total{result}`,
+`harmonia_pull_through_upstream_lookups_total{result}` and
+`harmonia_pull_through_substitute_duration_seconds`.
 
 ### Logging Configuration
 

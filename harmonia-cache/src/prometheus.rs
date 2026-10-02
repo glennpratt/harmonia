@@ -5,7 +5,7 @@ use actix_web::{
     web,
 };
 use prometheus::{
-    Encoder, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder,
+    Encoder, Histogram, HistogramOpts, HistogramVec, IntCounterVec, Opts, Registry, TextEncoder,
 };
 use std::{
     future::{Future, Ready, ready},
@@ -20,6 +20,50 @@ pub struct PrometheusMetrics {
     pub registry: Registry,
     http_requests_total: IntCounterVec,
     http_requests_duration: HistogramVec,
+    pub pull_through: PullThroughMetrics,
+}
+
+#[derive(Clone)]
+pub struct PullThroughMetrics {
+    /// narinfo misses handed to pull-through, by outcome.
+    pub requests: IntCounterVec,
+    /// Upstream narinfo lookups, by result.
+    pub upstream_lookups: IntCounterVec,
+    pub substitute_duration: Histogram,
+}
+
+impl PullThroughMetrics {
+    fn new(registry: &Registry) -> Result<Self, prometheus::Error> {
+        let requests = IntCounterVec::new(
+            Opts::new(
+                "harmonia_pull_through_requests_total",
+                "narinfo misses handled by pull-through, by outcome",
+            ),
+            &["result"],
+        )?;
+        let upstream_lookups = IntCounterVec::new(
+            Opts::new(
+                "harmonia_pull_through_upstream_lookups_total",
+                "Upstream narinfo lookups made by pull-through, by result",
+            ),
+            &["result"],
+        )?;
+        let substitute_duration = Histogram::with_opts(
+            HistogramOpts::new(
+                "harmonia_pull_through_substitute_duration_seconds",
+                "Time for the nix-daemon to substitute a pulled path",
+            )
+            .buckets(vec![0.1, 0.5, 1.0, 5.0, 10.0, 30.0, 60.0, 300.0, 900.0]),
+        )?;
+        registry.register(Box::new(requests.clone()))?;
+        registry.register(Box::new(upstream_lookups.clone()))?;
+        registry.register(Box::new(substitute_duration.clone()))?;
+        Ok(Self {
+            requests,
+            upstream_lookups,
+            substitute_duration,
+        })
+    }
 }
 
 impl PrometheusMetrics {
@@ -47,11 +91,13 @@ impl PrometheusMetrics {
 
         registry.register(Box::new(http_requests_total.clone()))?;
         registry.register(Box::new(http_requests_duration.clone()))?;
+        let pull_through = PullThroughMetrics::new(&registry)?;
 
         Ok(PrometheusMetrics {
             registry,
             http_requests_total,
             http_requests_duration,
+            pull_through,
         })
     }
 

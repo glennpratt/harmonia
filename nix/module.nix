@@ -13,6 +13,7 @@ let
 
   format = pkgs.formats.toml { };
   configFile = format.generate "harmonia.toml" cacheCfg.settings;
+  pullThrough = cacheCfg.settings.pull_through.enable or false;
 
   signKeyPaths =
     cacheCfg.signKeyPaths ++ (if cacheCfg.signKeyPath != null then [ cacheCfg.signKeyPath ] else [ ]);
@@ -157,7 +158,8 @@ in
         description = "harmonia binary cache service";
 
         requires = [ "harmonia-dev.socket" ];
-        after = [ "harmonia-dev.socket" ];
+        after = [ "harmonia-dev.socket" ] ++ lib.optional pullThrough "nix-daemon.socket";
+        wants = lib.optional pullThrough "nix-daemon.socket";
 
         environment = {
           CONFIG_FILE = lib.mkIf (configFile != null) configFile;
@@ -205,9 +207,17 @@ in
           SystemCallArchitectures = "native";
 
           # accept(2) on the inherited fd is exempt from both restrictions.
-          PrivateNetwork = true;
-          RestrictAddressFamilies = [ "AF_UNIX" ];
-          IPAddressDeny = "any";
+          # Pull-through needs to reach its upstreams (and the nix-daemon
+          # socket, which AF_UNIX already covers).
+          PrivateNetwork = !pullThrough;
+          RestrictAddressFamilies = [
+            "AF_UNIX"
+          ]
+          ++ lib.optionals pullThrough [
+            "AF_INET"
+            "AF_INET6"
+          ];
+          IPAddressDeny = lib.mkIf (!pullThrough) "any";
 
           PrivateTmp = true;
           PrivateDevices = true;

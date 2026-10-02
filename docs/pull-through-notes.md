@@ -1,7 +1,9 @@
 # Pull-through substitution: working notes
 
-Status: notes only, nothing implemented. Branch `pull-through` in
-glennpratt/harmonia, off upstream `main` at acf86e8.
+Status: the harmonia side is implemented on branch `pull-through` in
+glennpratt/harmonia (off upstream `main` at acf86e8); see "Implementation"
+below. Not done yet: the knix prototype and integration, and the upstream
+issue.
 
 ## The use case
 
@@ -122,6 +124,42 @@ Why through the daemon, rather than harmonia caching upstream NARs itself:
 Prior art: niks3 added a pull-through read proxy
 ([Qumulo/niks3#1](https://github.com/Qumulo/niks3/pull/1)), which caches into
 its own storage rather than through a daemon.
+
+## Implementation
+
+`harmonia-cache/src/pull_through/`, hooked into `narinfo::get` on a miss.
+
+- **Resolve** (`upstream.rs`): `awc`, with rustls and webpki roots, queries
+  each upstream's `/<hash>.narinfo` in order and reads `StorePath:`. It
+  rejects a path whose hash differs from the one requested. 404 and 403 count
+  as a miss. netrc support is in `netrc.rs`, with no new crate.
+- **Substitute** (`daemon.rs`): a fresh daemon connection per pull runs
+  `AddTempRoot` and then `EnsurePath`. The path is then rooted again on a
+  single long-lived connection. That connection moves to "previous" every
+  `temp_root_ttl` and the old previous one is closed, so a root lasts between
+  one and two ttls, using two daemon connections however many paths are
+  pulled.
+- **Under load** (`mod.rs`):
+  - Single-flight is a `watch` channel per hash, since actix workers are
+    separate runtimes.
+  - The pull runs as a spawned task, so a request timing out
+    (`request_timeout`, then 404) doesn't cancel it.
+  - The negative cache holds misses and failures, capped at 100k entries.
+  - A semaphore limits concurrent `EnsurePath` calls only; resolves aren't
+    limited.
+- **Config**: a `[pull_through]` section in `config.rs`. Durations are
+  strings like `"5m"` or plain integer seconds.
+- **Metrics**: `harmonia_pull_through_requests_total{result}`,
+  `..._upstream_lookups_total{result}` and `..._substitute_duration_seconds`.
+- **NixOS module**: with `pull_through.enable`, the service drops
+  `PrivateNetwork` and `IPAddressDeny` and gains `AF_INET`/`AF_INET6`.
+- **Tests**:
+  - unit tests (config, netrc, resolve against a local HTTP fixture,
+    single-flight, negative cache, timeout, concurrency limit);
+  - `harmonia-cache/tests/pull_through.rs`, end to end against a real
+    `nix-daemon` with a second harmonia as upstream, covering signatures, the
+    GC race, the negative cache, and GC pruning after the roots rotate out;
+  - `nix/tests/pull-through.nix`.
 
 ## Build artifacts
 

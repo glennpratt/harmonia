@@ -123,9 +123,6 @@ graph BT
     store-db --> store-derivation
     store-db --> store-path-info
     store-nar-info --> store-path-info
-    cache --> file-nar
-    cache --> store-db
-    cache --> store-nar-info
     protocol --> file-nar
     protocol --> protocol-derive
     protocol --> store-aterm
@@ -136,6 +133,9 @@ graph BT
     daemon --> protocol
     daemon --> store-db
     store-remote --> protocol
+    cache --> store-db
+    cache --> store-nar-info
+    cache --> store-remote
 ```
 
 `harmonia-client`, `harmonia-ssh-store` and `harmonia-bench` currently have no

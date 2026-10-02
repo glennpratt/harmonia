@@ -35,6 +35,7 @@ mod nar;
 mod narinfo;
 mod narlist;
 mod prometheus;
+mod pull_through;
 mod realisations;
 mod root;
 mod serve;
@@ -163,6 +164,16 @@ async fn inner_main() -> Result<()> {
     let metrics = prometheus::initialize_metrics()?;
     let config = config::load()?;
 
+    let pull_through = web::Data::new(if config.pull_through.enable {
+        Some(pull_through::PullThrough::start(
+            &config.pull_through,
+            config.store.store_dir(),
+            Some(metrics.pull_through.clone()),
+        )?)
+    } else {
+        None
+    });
+
     let c = web::Data::new(config);
     let config_data = c.clone();
     let metrics_data = web::Data::new(metrics.clone());
@@ -187,6 +198,7 @@ async fn inner_main() -> Result<()> {
             .wrap(prometheus::PrometheusMiddleware::new(metrics.clone()))
             .app_data(config_data.clone())
             .app_data(metrics_data.clone())
+            .app_data(pull_through.clone())
             .route("/", web::get().to(root::get))
             .route("/", web::head().to(root::get))
             .route("/{hash}.ls", web::get().to(narlist::get))
